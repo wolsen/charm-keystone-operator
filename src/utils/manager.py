@@ -19,6 +19,13 @@ from ops.model import MaintenanceStatus
 from keystoneauth1 import session
 from keystoneauth1.identity import v3
 from keystoneclient.v3 import client
+from keystoneclient.v3.domains import Domain
+from keystoneclient.v3.endpoints import Endpoint
+from keystoneclient.v3.users import User
+from keystoneclient.v3.projects import Project
+from keystoneclient.v3.regions import Region
+from keystoneclient.v3.roles import Role
+from keystoneclient.v3.services import Service
 
 from utils.cprocess import check_output
 from utils.cprocess import check_call
@@ -160,7 +167,8 @@ class KeystoneManager(framework.Object):
             logger.info("Setting up fernet tokens...")
             out = check_output(container,
                                ['sudo', '-u', 'keystone',
-                                'keystone-manage', 'fernet_setup'],
+                                'keystone-manage', '--config-dir',
+                                '/etc/keystone', 'fernet_setup'],
                                service_name='keystone-fernet-setup')
             logging.debug(f'Output from keystone fernet setup: \n{out}')
         except ContainerProcessError:
@@ -176,7 +184,8 @@ class KeystoneManager(framework.Object):
             logger.info("Setting up credentials...")
             check_output(container,
                          ['sudo', '-u', 'keystone',
-                          'keystone-manage', 'credential_setup'],
+                          'keystone-manage', '--config-dir', '/etc/keystone',
+                          'credential_setup'],
                          service_name='keystone-credential-setup')
         except ContainerProcessError:
             logger.exception('Error occurred during credential setup')
@@ -194,7 +203,8 @@ class KeystoneManager(framework.Object):
             # enabling immutable roles for this. This is unnecessary as it is
             # now the default behavior for keystone-manage bootstrap.
             check_call(container,
-                       ['keystone-manage', 'bootstrap',
+                       ['keystone-manage', '--config-dir', '/etc/keystone',
+                        'bootstrap',
                         '--bootstrap-username', self.charm.charm_user,
                         '--bootstrap-password', self.charm.charm_password,
                         '--bootstrap-project-name', 'admin',
@@ -214,25 +224,47 @@ class KeystoneManager(framework.Object):
 
         """
         with guard(self.charm, 'Setting up initial projects and users'):
-            self._setup_admin_accounts()
-            self._setup_service_accounts()
+            results = {}
+
+            default_domain = self._get_default_domain()
+            results['default_domain_id'] = default_domain.id
+            results['default_domain_name'] = default_domain.name
+
+            domain, project, user = self._setup_admin_accounts()
+            results['admin_domain_id'] = domain.id
+            results['admin_domain_name'] = domain.name
+            results['admin_project_id'] = project.id
+            results['admin_project_name'] = project.name
+            results['admin_user_name'] = user.name
+            results['admin_user_id'] = user.id
+
+            domain, project = self._setup_service_accounts()
+            results['service_domain_id'] = domain.id
+            results['service_domain_name'] = domain.name
+            results['service_project_id'] = project.id
+            results['service_project_name'] = project.name
+
             self.update_service_catalog_for_keystone()
 
-    def _setup_admin_accounts(self):
+            return results
+
+    def _get_default_domain(self) -> Domain:
         """
 
         """
         # Get the default domain id
         default_domain = self.get_domain('default')
         logger.debug(f'Default domain id: {default_domain.id}')
-        self.charm._state.default_domain_id = default_domain.id  # noqa
+        return default_domain
 
+    def _setup_admin_accounts(self) -> typing.Tuple[Domain, Project, User]:
+        """
+
+        """
         # Get the admin domain id
         admin_domain = self.create_domain(name='admin_domain',
                                           may_exist=True)
         logger.debug(f'Admin domain id: {admin_domain.id}')
-        self.charm._state.admin_domain_id = admin_domain.id  # noqa
-        self.charm._state.admin_domain_name = admin_domain.name  # noqa
 
         # Ensure that we have the necessary projects: admin and service
         admin_project = self.create_project(name='admin', domain=admin_domain,
@@ -261,7 +293,9 @@ class KeystoneManager(framework.Object):
         self.grant_role(role=admin_role, user=admin_user,
                         domain=admin_domain, may_exist=True)
 
-    def _setup_service_accounts(self):
+        return admin_domain, admin_project, admin_user
+
+    def _setup_service_accounts(self) -> typing.Tuple[Domain, Project]:
         """
 
         """
@@ -274,9 +308,10 @@ class KeystoneManager(framework.Object):
                                               domain=service_domain,
                                               may_exist=True)
         logger.debug(f'Service project id: {service_project.id}.')
-        self.charm._state.service_project_id = service_project.id  # noqa
 
-    def update_service_catalog_for_keystone(self):
+        return service_domain, service_project
+
+    def update_service_catalog_for_keystone(self) -> None:
         """
 
         """
@@ -298,8 +333,9 @@ class KeystoneManager(framework.Object):
                 self.create_endpoint(service=service, interface=interface,
                                      url=url, region=region, may_exist=True)
 
-    def get_domain(self, name: str) -> 'Domain':
-        """Returns the domain specified by the name, or None if a matching
+    def get_domain(self, name: str) -> typing.Union[Domain, None]:
+        """
+        Returns the domain specified by the name, or None if a matching
         domain could not be found.
 
         :param name: the name of the domain
@@ -313,7 +349,7 @@ class KeystoneManager(framework.Object):
         return None
 
     def create_domain(self, name: str, description: str = 'Created by Juju',
-                      may_exist: bool = False) -> 'Domain':
+                      may_exist: bool = False) -> Domain:
         """
 
         """
@@ -328,9 +364,9 @@ class KeystoneManager(framework.Object):
         logger.debug(f'Created domain {name} with id {domain.id}')
         return domain
 
-    def create_project(self, name: str, domain: str,
+    def create_project(self, name: str, domain: typing.Union[Domain, str],
                        description: str = 'Created by Juju',
-                       may_exist: bool = False) -> 'Project':
+                       may_exist: bool = False) -> Project:
         """
 
         """
@@ -347,9 +383,8 @@ class KeystoneManager(framework.Object):
         return project
 
     def create_user(self, name: str, password: str, email: str = None,
-                    project: 'Project' = None,
-                    domain: 'Domain' = None,
-                    may_exist: bool = False) -> 'User':
+                    project: Project = None, domain: Domain = None,
+                    may_exist: bool = False) -> User:
         """
 
         """
@@ -366,8 +401,9 @@ class KeystoneManager(framework.Object):
         logger.debug(f'Created user {user.name} with id {user.id}.')
         return user
 
-    def get_user(self, name: str, project: 'Project' = None,
-                 domain: typing.Union[str, 'Domain'] = None) -> 'User':
+    def get_user(self, name: str, project: Project = None,
+                 domain: typing.Union[str, Domain] = None) \
+            -> typing.Union[User, None]:
         """
 
         """
@@ -378,8 +414,7 @@ class KeystoneManager(framework.Object):
 
         return None
 
-    def create_role(self, name: str,
-                    domain: typing.Union['Domain', str] = None,
+    def create_role(self, name: str, domain: typing.Union[Domain, str] = None,
                     may_exist: bool = False) -> 'Role':
         """
 
@@ -395,21 +430,20 @@ class KeystoneManager(framework.Object):
         logger.debug(f'Created role {name} with id {role.id}.')
         return role
 
-    def get_role(self, name: str,
-                 domain: 'Domain' = None) -> 'Role':
+    def get_role(self, name: str, domain: typing.Union[Domain, str] = None) \
+            -> typing.Union[Role, None]:
         """
 
         """
         for role in self.api.roles.list(domain=domain):
-            if role.name == name:
+            if role.name.lower() == name.lower():
                 return role
 
         return None
 
-    def get_roles(self, user: 'User',
-                  project: 'Project' = None,
-                  domain: 'Project' = None) \
-            -> typing.List['Role']:
+    def get_roles(self, user: User, project: Project = None,
+                  domain: Domain = None) \
+            -> typing.List[Role]:
         """
 
         """
@@ -425,11 +459,10 @@ class KeystoneManager(framework.Object):
 
         return roles
 
-    def grant_role(self, role: typing.Union['Role', str],
-                   user: 'User',
-                   project: typing.Union['Project', str] = None,
-                   domain: typing.Union['Domain', str] = None,
-                   may_exist: bool = False) -> 'Role':
+    def grant_role(self, role: typing.Union[Role, str], user: User,
+                   project: typing.Union[Project, str] = None,
+                   domain: typing.Union[Domain, str] = None,
+                   may_exist: bool = False) -> Role:
         """
 
         """
@@ -458,7 +491,7 @@ class KeystoneManager(framework.Object):
         return role
 
     def create_region(self, name: str, description: str = None,
-                      may_exist: bool = False) -> 'Region':
+                      may_exist: bool = False) -> Region:
         """
 
         """
@@ -474,7 +507,7 @@ class KeystoneManager(framework.Object):
 
     def create_service(self, name: str, service_type: str,
                        description: str, owner: str = None,
-                       may_exist: bool = False) -> 'Service':
+                       may_exist: bool = False) -> Service:
         """
 
         """
@@ -493,9 +526,9 @@ class KeystoneManager(framework.Object):
         logger.debug(f'Created service {service.name} with id {service.id}')
         return service
 
-    def create_endpoint(self, service: 'Service', url: str, interface: str,
+    def create_endpoint(self, service: Service, url: str, interface: str,
                         region: str, may_exist: bool = False) \
-            -> 'Endpoint':
+            -> Endpoint:
         """
 
         """

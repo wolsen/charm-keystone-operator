@@ -110,6 +110,10 @@ class KeystoneContext(ContextGenerator):
     def __call__(self, *args, **kwargs):
         config = self.charm.model.config
 
+        public_endpoint = self.charm.public_endpoint
+        if public_endpoint.endswith('/v3'):
+            public_endpoint = public_endpoint[:-2]
+
         ctxt = {
             'api_version': 3,
             'admin_role': self.charm.admin_role,
@@ -126,7 +130,7 @@ class KeystoneContext(ContextGenerator):
             'identity_backend': 'sql',
             'token_provider': 'fernet',
             'fernet_max_active_keys': config['fernet-max-active-keys'],
-            'public_endpoint': self.charm.public_endpoint,
+            'public_endpoint': public_endpoint,
             'admin_endpoint': self.charm.admin_endpoint,
             'domain_config_dir': '/etc/keystone/domains',
             'log_config': '/etc/keystone/logging.conf.j2',

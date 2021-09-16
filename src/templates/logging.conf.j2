@@ -5,7 +5,7 @@ keys=root
 keys=normal,normal_with_name,debug
 
 [handlers]
-keys=production,file,devel
+keys=file,devel
 
 [logger_root]
 {% if root_level -%}
@@ -13,17 +13,7 @@ level={{ root_level }}
 {% else -%}
 level=WARNING
 {% endif -%}
-handlers=file,production
-
-[handler_production]
-class=handlers.SysLogHandler
-{% if log_level -%}
-level={{ log_level }}
-{% else -%}
-level=ERROR
-{% endif -%}
-formatter=normal_with_name
-args=(('/dev/log'), handlers.SysLogHandler.LOG_USER)
+handlers=file
 
 [handler_file]
 class=FileHandler

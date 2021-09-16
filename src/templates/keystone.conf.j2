@@ -4,7 +4,7 @@
 # Configuration file maintained by Juju. Local changes may be overwritten.
 ###############################################################################
 [DEFAULT]
-use_syslog = True
+use_syslog = False
 log_config_append = /etc/keystone/logging.conf
 debug = {{ debug }}
 
@@ -18,6 +18,14 @@ default_domain_id = {{ default_domain_id }}
 
 domain_specific_drivers_enabled = True
 domain_config_dir = {{ domain_config_dir }}
+
+[database]
+{% if database_host -%}
+connection = {{ database_type }}://{{ database_user }}:{{ database_password }}@{{ database_host }}/{{ database }}{% if database_ssl_ca %}?ssl_ca={{ database_ssl_ca }}{% if database_ssl_cert %}&ssl_cert={{ database_ssl_cert }}&ssl_key={{ database_ssl_key }}{% endif %}{% endif %}
+{% else -%}
+connection = sqlite:////var/lib/keystone/keystone.db
+{% endif -%}
+connection_recycle_time = 200
 
 [credential]
 driver = sql
@@ -48,10 +56,10 @@ expiration_time = {{ dogpile_cache_expiration }}
 driver = sql
 
 [assignment]
-driver = {{ assignment_backend }}
+driver = sql
 
 [auth]
-methods = {{ auth_methods }}
+# methods = external,password,token,oauth1,openid,totp,application_credentials
 
 [paste_deploy]
 config_file = {{ paste_config_file }}
